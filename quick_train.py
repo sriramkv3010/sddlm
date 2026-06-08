@@ -1,24 +1,3 @@
-"""
-quick_train.py — Validates that the model genuinely learns on real WikiText-2,
-                 but completes in ~15 minutes on M4 MacBook Air.
-
-What this proves:
-  • Data pipeline works (tokeniser, chunking, batching)
-  • Model + diffusion + loss work end-to-end on real text
-  • Loss decreases on real data (not just a synthetic batch)
-  • Generation produces readable text fragments
-
-What it doesn't prove:
-  • Final generation quality (need full 50k steps for that)
-
-After this succeeds, run:
-    python src/train.py    ← full run, ~1.5 hrs on M4 (see note below)
-
-Usage:
-    cd sddlm/
-    python quick_train.py
-"""
-
 import os
 import sys
 import time
@@ -35,15 +14,8 @@ from src.model import DiffusionLM
 from src.diffusion import NoiseSchedule, UniformDiffusion
 from src.loss import compute_loss
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config: same architecture as the full run, fewer steps
-# Keep d_model / n_layers IDENTICAL to full config so you're testing
-# the real model, not a toy.
-# ─────────────────────────────────────────────────────────────────────────────
-
 cfg = Config()
 
-# Model: same as full training
 cfg.model = ModelConfig(
     vocab_size=50257,
     d_model=256,
@@ -60,15 +32,14 @@ cfg.diffusion = DiffusionConfig(
     eps=1e-4,
 )
 
-# Training: 3000 steps ≈ 15 min on M4
 cfg.training = TrainingConfig(
     data_dir="data/wikitext2",
     batch_size=16,
     learning_rate=3e-4,
-    warmup_steps=200,  # shorter warmup for quick run
+    warmup_steps=200,  
     max_steps=3000,
     eval_every=300,
-    save_every=3000,  # only save at the end
+    save_every=3000, 
     checkpoint_dir="checkpoints/quick",
     device="auto",
     weight_decay=0.0,
@@ -81,12 +52,6 @@ cfg.loss = LossConfig(
     epsilon=1e-6,
     n_neg_samples=1,
 )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def get_device():
     if torch.backends.mps.is_available():
@@ -123,10 +88,6 @@ def decode_sample(ids, tokenizer):
     return tokenizer.decode(ids.tolist(), skip_special_tokens=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def main():
     device = get_device()
@@ -141,19 +102,17 @@ def main():
         print("Run the download snippet from README.md first.")
         sys.exit(1)
 
-    # ── data ────────────────────────────────────────────────────────────────
+  
     train_loader, test_loader, tokenizer = get_dataloaders(cfg)
 
-    # ── model ────────────────────────────────────────────────────────────────
+   
     model = DiffusionLM(cfg.model).to(device)
-
-    # ── diffusion ────────────────────────────────────────────────────────────
     sched = NoiseSchedule(
         cfg.diffusion.num_timesteps, cfg.diffusion.schedule, cfg.diffusion.eps
     )
     diffusion = UniformDiffusion(sched, cfg.model.vocab_size)
 
-    # ── optimiser ────────────────────────────────────────────────────────────
+  
     opt = AdamW(
         model.parameters(),
         lr=cfg.training.learning_rate,
@@ -161,7 +120,6 @@ def main():
         weight_decay=cfg.training.weight_decay,
     )
 
-    # ── training ─────────────────────────────────────────────────────────────
     model.train()
     train_iter = iter(train_loader)
     ema_loss = None
@@ -172,7 +130,6 @@ def main():
     print("─" * 50)
 
     for step in range(1, cfg.training.max_steps + 1):
-        # fetch batch
         try:
             x0 = next(train_iter)
         except StopIteration:
@@ -214,12 +171,10 @@ def main():
                 f"(ETA {eta_min:.0f} min)"
             )
 
-        # validation
         if step % cfg.training.eval_every == 0:
             val_loss = eval_loss(model, diffusion, sched, test_loader, cfg.loss, device)
             print(f"  ↳ [val] loss={val_loss:.4f}")
 
-    # ── save checkpoint ───────────────────────────────────────────────────────
     os.makedirs(cfg.training.checkpoint_dir, exist_ok=True)
     ckpt_path = os.path.join(cfg.training.checkpoint_dir, "quick_3k.pt")
     torch.save(
@@ -233,7 +188,6 @@ def main():
     )
     print(f"\nCheckpoint saved → {ckpt_path}")
 
-    # ── loss sanity check ─────────────────────────────────────────────────────
     first100 = sum(loss_log[:100]) / 100
     last100 = sum(loss_log[-100:]) / 100
     dropped = (first100 - last100) / first100 * 100
@@ -244,7 +198,6 @@ def main():
     else:
         print("✓  Loss is decreasing — model is learning correctly.")
 
-    # ── generate a few samples ────────────────────────────────────────────────
     print("\n── Sample outputs (64 denoising steps) ──")
     model.eval()
     with torch.no_grad():
