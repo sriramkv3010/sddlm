@@ -1,19 +1,3 @@
-"""
-evaluate.py — Generative Perplexity (Gen PPL) and Entropy.
-
-Usage:
-    cd sddlm/
-
-    # Quick 3k checkpoint (fast check, numbers won't be great)
-    python3 src/evaluate.py --checkpoint checkpoints/quick/quick_3k.pt --n_gen 50 --steps 64
-
-    # Full trained checkpoint
-    python3 src/evaluate.py --checkpoint checkpoints/final.pt --n_gen 200 --steps 128
-
-    # Skip Gen PPL if no internet
-    python3 src/evaluate.py --checkpoint checkpoints/final.pt --skip_ppl
-"""
-
 import os
 import sys
 import math
@@ -32,7 +16,6 @@ from src.sample import load_model
 
 
 def generate_sequences(model, diffusion, n, seq_len, num_steps, device, batch_size=16):
-    """Generate n sequences with progress bar."""
     all_ids = []
     model.eval()
     for start in range(0, n, batch_size):
@@ -53,16 +36,6 @@ def generate_sequences(model, diffusion, n, seq_len, num_steps, device, batch_si
 
 
 def compute_entropy(generated_ids):
-    """
-    Shannon entropy over empirical token distribution (nats).
-
-    H = -sum_v  p(v) * log(p(v))
-
-    Interpretation:
-      ~0 nats   = degenerate (one token repeated)
-      ~5.3 nats = paper target on OWT
-      ~10.8 nats = pure random (max for vocab_size=50257)
-    """
     counter = Counter()
     total = 0
     for seq in generated_ids:
@@ -78,19 +51,6 @@ def compute_entropy(generated_ids):
 
 
 def compute_gen_ppl(generated_ids, batch_size=8):
-    """
-    Score generated sequences under frozen GPT-2.
-
-    Gen PPL = exp( -1/N * sum log p_GPT2(token | context) )
-
-    Always runs on CPU to avoid MPS issues with HuggingFace.
-
-    Interpretation:
-      ~45  = paper SDDLM-V1 on OWT  (excellent)
-      ~80  = paper Duo baseline      (good)
-      ~300 = learning but not converged
-      ~3000+ = barely trained
-    """
     from transformers import GPT2LMHeadModel, GPT2TokenizerFast
 
     print("\n  Loading GPT-2 scorer (first run downloads ~500 MB, cached after)...")
