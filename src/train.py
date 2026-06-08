@@ -1,18 +1,3 @@
-"""
-train.py — Main training loop for SDDLM / SDDLM-V1.
-
-Usage:
-    cd sddlm/
-    python src/train.py
-
-Key features:
-  • Auto-detects device: MPS (Apple Silicon) > CUDA > CPU
-  • Linear LR warmup followed by constant LR (paper setting for small models)
-  • Gradient clipping (prevents explosion, common in diffusion training)
-  • Periodic validation loss + checkpoint saving
-  • Resumes from latest checkpoint if one exists
-"""
-
 import os
 import sys
 import time
@@ -23,7 +8,6 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 
-# ── allow running as  python src/train.py  from the project root ──────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import Config, ModelConfig, DiffusionConfig, TrainingConfig, LossConfig
@@ -31,11 +15,6 @@ from src.dataset import get_dataloaders
 from src.model import DiffusionLM
 from src.diffusion import NoiseSchedule, UniformDiffusion
 from src.loss import compute_loss
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Device selection
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def get_device(preference: str = "auto") -> torch.device:
     if preference == "auto":
@@ -45,12 +24,6 @@ def get_device(preference: str = "auto") -> torch.device:
             return torch.device("cuda")
         return torch.device("cpu")
     return torch.device(preference)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Learning-rate schedule
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def get_lr(step: int, warmup_steps: int, base_lr: float) -> float:
     """
@@ -64,12 +37,6 @@ def get_lr(step: int, warmup_steps: int, base_lr: float) -> float:
     if step < warmup_steps:
         return base_lr * (step + 1) / warmup_steps
     return base_lr
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Checkpoint helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def save_checkpoint(state: dict, path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -91,12 +58,6 @@ def load_latest_checkpoint(ckpt_dir: str, model, optimizer):
     step = state["step"]
     print(f"  [ckpt] resumed from {path}  (step {step})")
     return step
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Validation
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 @torch.no_grad()
 def evaluate(model, diffusion, test_loader, loss_cfg, device, max_batches=50):
@@ -128,14 +89,7 @@ def evaluate(model, diffusion, test_loader, loss_cfg, device, max_batches=50):
     model.train()
     return total_loss / max(n_batches, 1), total_frac / max(n_batches, 1)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main training loop
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def train(config: Config):
-    # ── setup ──────────────────────────────────────────────────────────────
     device = get_device(config.training.device)
     print(f"\n{'='*60}")
     print(f"  SDDLM Training")
@@ -146,13 +100,9 @@ def train(config: Config):
     print(f"  max_steps  : {config.training.max_steps}")
     print(f"{'='*60}\n")
 
-    # ── data ──────────────────────────────────────────────────────────────
     train_loader, test_loader, tokenizer = get_dataloaders(config)
-
-    # ── model ─────────────────────────────────────────────────────────────
     model = DiffusionLM(config.model).to(device)
 
-    # ── diffusion ─────────────────────────────────────────────────────────
     schedule = NoiseSchedule(
         num_timesteps=config.diffusion.num_timesteps,
         schedule=config.diffusion.schedule,
@@ -160,9 +110,6 @@ def train(config: Config):
     )
     diffusion = UniformDiffusion(schedule, vocab_size=config.model.vocab_size)
 
-    # ── optimiser ─────────────────────────────────────────────────────────
-    # Separate weight-decay and no-decay parameter groups:
-    # Biases, layer-norm params, and embeddings should NOT have weight decay.
     decay_params = []
     no_decay_params = []
     for name, p in model.named_parameters():
@@ -183,22 +130,18 @@ def train(config: Config):
         eps=1e-8,
     )
 
-    # ── resume from checkpoint if available ───────────────────────────────
     start_step = load_latest_checkpoint(
         config.training.checkpoint_dir, model, optimizer
     )
 
-    # ── training ──────────────────────────────────────────────────────────
     model.train()
     step = start_step
     train_iter = iter(train_loader)
 
-    # Exponential moving average of loss (for smoother logging)
     ema_loss = None
     t0 = time.time()
 
     while step < config.training.max_steps:
-        # ── fetch batch (cycle through dataset) ────────────────────────────
         try:
             x0 = next(train_iter)
         except StopIteration:
@@ -207,35 +150,25 @@ def train(config: Config):
         x0 = x0.to(device)  # (B, L)
         B = x0.shape[0]
 
-        # ── update learning rate ────────────────────────────────────────────
         lr = get_lr(step, config.training.warmup_steps, config.training.learning_rate)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # ── forward diffusion: x_0 → x_t ───────────────────────────────────
         t_idx = schedule.sample_t(B, device)  # (B,) random timesteps
         xt, _ = diffusion.q_sample(x0, t_idx)  # (B, L) corrupted
         t_float = schedule.t_to_float(t_idx)  # (B,) fractions
-
-        # ── model forward pass ──────────────────────────────────────────────
         logits = model(xt, t_float)  # (B, L, V)
 
-        # ── loss ────────────────────────────────────────────────────────────
         loss, info = compute_loss(logits, x0, xt, config.loss)
 
-        # ── backward ────────────────────────────────────────────────────────
         optimizer.zero_grad()
         loss.backward()
 
-        # Gradient clipping — prevents exploding gradients
-        # Very important for SDDLM-V1 because the negative-gradient term
-        # can produce large gradients when log p(x̂) → -∞ for rare tokens
         nn.utils.clip_grad_norm_(model.parameters(), config.training.grad_clip)
 
         optimizer.step()
         step += 1
 
-        # ── logging ─────────────────────────────────────────────────────────
         loss_val = loss.item()
         ema_loss = loss_val if ema_loss is None else 0.98 * ema_loss + 0.02 * loss_val
 
@@ -252,7 +185,6 @@ def train(config: Config):
                 f"ETA {eta_min:.0f} min"
             )
 
-        # ── validation ──────────────────────────────────────────────────────
         if step % config.training.eval_every == 0:
             val_loss, val_frac = evaluate(
                 model, diffusion, test_loader, config.loss, device
@@ -263,7 +195,6 @@ def train(config: Config):
                 f"frac_corrupt {val_frac:.2f}"
             )
 
-        # ── checkpoint ──────────────────────────────────────────────────────
         if step % config.training.save_every == 0:
             save_checkpoint(
                 {
@@ -275,7 +206,6 @@ def train(config: Config):
                 os.path.join(config.training.checkpoint_dir, f"step_{step:07d}.pt"),
             )
 
-    # ── final checkpoint ────────────────────────────────────────────────────
     save_checkpoint(
         {
             "step": step,
@@ -289,20 +219,7 @@ def train(config: Config):
     return model
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     cfg = Config()
-
-    # ── Tiny override for quick smoke-test on CPU ──────────────────────────
-    # Remove or comment out these lines for full training
-    # cfg.model.n_layers    = 2
-    # cfg.model.d_model     = 64
-    # cfg.model.d_ff        = 256
-    # cfg.model.n_heads     = 2
-    # cfg.training.max_steps = 500
-    # cfg.training.eval_every = 100
 
     train(cfg)
