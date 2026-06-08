@@ -1,22 +1,3 @@
-"""
-sample.py — Generate text from a trained SDDLM checkpoint.
-
-Usage:
-    cd sddlm/
-    python src/sample.py --checkpoint checkpoints/final.pt --steps 64 --n 4
-
-Generation process:
-  1. Start: x_T ~ Uniform(V)  — pure noise (random tokens)
-  2. For t = T-1, T-2, ..., 1:
-       a. Feed (x_t, t) to model → p_θ(x_0 | x_t)
-       b. Sample x_0_hat
-       c. Re-corrupt to level (t-1): x_{t-1} ~ q(x_{t-1} | x_0_hat)
-  3. Final: argmax of model output at t=0
-
-The quality improves with more sampling steps (up to a point).
-On WikiText-2 scale, 64–256 steps usually suffices.
-"""
-
 import os
 import sys
 import argparse
@@ -51,12 +32,7 @@ def generate(
     num_steps: int = 64,
     device: torch.device = torch.device("cpu"),
 ) -> list[str]:
-    """
-    Generate `n_sequences` text samples.
-
-    Returns:
-        List of decoded strings.
-    """
+    
     token_ids = diffusion.sample(
         model=model,
         batch_size=n_sequences,
@@ -67,7 +43,6 @@ def generate(
 
     texts = []
     for ids in token_ids:
-        # Skip special tokens (EOS=50256) when decoding
         text = tokenizer.decode(ids.tolist(), skip_special_tokens=True)
         texts.append(text)
     return texts
@@ -98,7 +73,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # ── device ────────────────────────────────────────────────────────────
     if args.device == "auto":
         if torch.backends.mps.is_available():
             device = torch.device("mps")
@@ -110,7 +84,6 @@ def main():
         device = torch.device(args.device)
     print(f"Device: {device}")
 
-    # ── load model ────────────────────────────────────────────────────────
     if not os.path.exists(args.checkpoint):
         print(f"ERROR: checkpoint not found at '{args.checkpoint}'")
         print("Train first:  python src/train.py")
@@ -118,7 +91,6 @@ def main():
 
     model, cfg = load_model(args.checkpoint, device)
 
-    # ── diffusion ─────────────────────────────────────────────────────────
     schedule = NoiseSchedule(
         num_timesteps=cfg.diffusion.num_timesteps,
         schedule=cfg.diffusion.schedule,
@@ -126,10 +98,8 @@ def main():
     )
     diffusion = UniformDiffusion(schedule, vocab_size=cfg.model.vocab_size)
 
-    # ── tokenizer ─────────────────────────────────────────────────────────
     tokenizer = get_tokenizer()
 
-    # ── generate ──────────────────────────────────────────────────────────
     print(f"\nGenerating {args.n} sequences  ({args.steps} denoising steps)…\n")
     texts = generate(
         model,
